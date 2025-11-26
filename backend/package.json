@@ -1,0 +1,26 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "nest start",
+    "start:dev": "nest start --watch"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@nestjs/common": "^11.1.9",
+    "@nestjs/core": "^11.1.9",
+    "@nestjs/platform-express": "^11.1.9",
+    "dotenv": "^17.2.3",
+    "pg": "^8.16.3",
+    "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.6"
+  }
+}

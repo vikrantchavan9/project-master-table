@@ -35,6 +35,9 @@ export default function MasterEntry() {
   const [states, setStates] = useState<any[]>([]);
   const [districts, setDistricts] = useState<any[]>([]);
 
+  // Edit State
+  const [editId, setEditId] = useState<string | number | null>(null);
+
   // API URL (Backend Port 2001)
   const API_URL =
     process.env.NEXT_PUBLIC_API_URL || "http://localhost:2001/api/masters";
@@ -103,7 +106,8 @@ export default function MasterEntry() {
   useEffect(() => {
     if (formData.country_code && selectedMaster !== "COUNTRY") {
       loadLookup("STATE", setStates, "country_code", formData.country_code);
-      setStates([]);
+      // Only clear states if we are NOT in edit mode (to prevent wiping existing edit data)
+      if (!editId) setStates([]);
     }
   }, [formData.country_code]);
 
@@ -121,25 +125,102 @@ export default function MasterEntry() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch(`${API_URL}/${selectedMaster}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
-      });
-      if (res.ok) {
-        alert("Saved successfully!");
-        fetchData();
-        // Keep context
-        setFormData((p: any) => {
-          const { country_code, stateID, districtID } = p;
-          return { country_code, stateID, districtID };
+      let res;
+      if (editId) {
+        // UPDATE MODE
+        res = await fetch(`${API_URL}/${selectedMaster}/${editId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(formData),
         });
       } else {
-        alert("Error saving data. Check console.");
+        // CREATE MODE
+        res = await fetch(`${API_URL}/${selectedMaster}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(formData),
+        });
+      }
+
+      if (res.ok) {
+        alert(editId ? "Updated successfully!" : "Saved successfully!");
+        fetchData();
+        cancelEdit(); // Reset form
+
+        // Optional: Keep context for faster entry if creating
+        if (!editId) {
+          setFormData((p: any) => ({
+            country_code: p.country_code,
+            stateID: p.stateID,
+            districtID: p.districtID,
+          }));
+        }
+      } else {
+        const errData = await res.json();
+        alert(`Error: ${errData.message || "Unknown error"}`);
       }
     } catch (err) {
       alert("Network Error");
     }
+  };
+
+  const handleEdit = (row: any) => {
+    // 1. Determine ID based on master type
+    let id = null;
+    if (selectedMaster === "COUNTRY") id = row.country_code;
+    else if (selectedMaster === "STATE") id = row.stateid;
+    else if (selectedMaster === "DISTRICT") id = row.districtid;
+    else if (selectedMaster === "PINCODE") id = row.placeid;
+
+    if (!id) return;
+    setEditId(id);
+
+    // 2. Populate Form Data (Normalization)
+    // We map the row data to the form fields expected by our inputs/state
+    const newForm = {
+      ...row,
+      stateID: row.stateid, // Map database 'stateid' to form 'stateID'
+      districtID: row.districtid,
+      stateName: row.state,
+      districtName: row.district,
+      // Ensure specific fields map correctly
+      country: row.country,
+      place: row.place,
+    };
+
+    setFormData(newForm);
+
+    // 3. Scroll to form
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleDelete = async (row: any) => {
+    let id = null;
+    if (selectedMaster === "COUNTRY") id = row.country_code;
+    else if (selectedMaster === "STATE") id = row.stateid;
+    else if (selectedMaster === "DISTRICT") id = row.districtid;
+    else if (selectedMaster === "PINCODE") id = row.placeid;
+
+    if (!id || !confirm("Are you sure you want to delete this record?")) return;
+
+    try {
+      const res = await fetch(`${API_URL}/${selectedMaster}/${id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        fetchData(); // Refresh
+      } else {
+        const data = await res.json();
+        alert(data.message || "Failed to delete");
+      }
+    } catch (e) {
+      alert("Network Error during delete");
+    }
+  };
+
+  const cancelEdit = () => {
+    setEditId(null);
+    setFormData({});
   };
 
   // --- Render Helpers ---
@@ -387,14 +468,19 @@ export default function MasterEntry() {
         return null;
     }
   };
-
   const renderTableRows = (row: any) => {
     const actions = (
       <td className="px-6 py-3 flex gap-2">
-        <button className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition-all">
+        <button
+          onClick={() => handleEdit(row)}
+          className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition-all"
+        >
           <Edit2 size={14} />
         </button>
-        <button className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-100 rounded-lg transition-all">
+        <button
+          onClick={() => handleDelete(row)}
+          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-100 rounded-lg transition-all"
+        >
           <Trash2 size={14} />
         </button>
       </td>

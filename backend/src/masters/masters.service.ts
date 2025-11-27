@@ -3,6 +3,7 @@ import {
   Inject,
   BadRequestException,
   InternalServerErrorException,
+  NotFoundException,
 } from "@nestjs/common";
 import { Pool } from "pg";
 
@@ -63,13 +64,11 @@ export class MastersService {
     if (!config) throw new BadRequestException(`Invalid Master Type: ${type}`);
 
     const page = parseInt(query.page) || 1;
-    // IF limit is passed in query (for dropdowns), use it. Otherwise default to 10.
     const limit = parseInt(query.limit) || 10;
     const offset = (page - 1) * limit;
     const search = query.search || "";
 
     // --- Alias Map ---
-    // We define aliases here to avoid "Ambiguous Column" errors
     let mainAlias = "";
     if (type === "STATE") mainAlias = "s";
     else if (type === "DISTRICT") mainAlias = "d";
@@ -83,24 +82,19 @@ export class MastersService {
     let values: any[] = [];
     let paramIdx = 1;
 
-    // 1. Search
     if (search) {
-      whereClauses.push(`${prefix(config.sort)} ILIKE $${paramIdx}`);
+      whereClauses.push(`${config.sort} ILIKE $${paramIdx}`);
       values.push(`%${search}%`);
       paramIdx++;
     }
 
-    // 2. Context Filters
     if (type === "STATE" && query.country_code) {
-      // FIX: Explicitly use alias 's.country_code'
-      whereClauses.push(`${prefix("country_code")} = $${paramIdx}`);
+      whereClauses.push(`country_code = $${paramIdx}`);
       values.push(query.country_code);
       paramIdx++;
     }
-
     if (type === "DISTRICT" && query.stateID) {
-      // FIX: Explicitly use alias 'd.stateid'
-      whereClauses.push(`${prefix("stateid")} = $${paramIdx}`);
+      whereClauses.push(`stateid = $${paramIdx}`);
       values.push(query.stateID);
       paramIdx++;
     }
@@ -108,49 +102,34 @@ export class MastersService {
     const whereSql =
       whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
 
-    // --- Dynamic SELECT Query ---
     let selectSql = `SELECT * FROM ${config.table}`;
 
-    // CUSTOM JOINS: Fetch parent names for grid display
+    // JOIN LOGIC: Ensure we fetch parent IDs so the Edit Form works
     if (type === "STATE") {
       selectSql = `
-        SELECT s.*, c.country as country_name
+        SELECT s.*, c.country as parent_name
         FROM mast_state s
         LEFT JOIN mast_country c ON s.country_code = c.country_code
       `;
     } else if (type === "DISTRICT") {
+      // Fetch 'country_code' from state so cascading dropdowns work on Edit
       selectSql = `
-        SELECT d.*, s.state as state_name, c.country as country_name
+        SELECT d.*, s.state as parent_name, s.country_code
         FROM mast_district d
         LEFT JOIN mast_state s ON d.stateid = s.stateid
-        LEFT JOIN mast_country c ON s.country_code = c.country_code
-      `;
-    } else if (type === "PINCODE") {
-      selectSql = `
-        SELECT p.*, 
-               c.country as country_name, 
-               s.state as state_name, 
-               d.district as district_name
-        FROM mast_place p
-        LEFT JOIN mast_country c ON p.country_code = c.country_code
-        LEFT JOIN mast_state s ON p.stateid = s.stateid
-        LEFT JOIN mast_district d ON p.districtid = d.districtid
       `;
     }
 
     const dataQuery = `
       ${selectSql}
       ${whereSql}
-      ORDER BY ${prefix(config.pk)} DESC
+      ORDER BY ${config.pk} DESC
       LIMIT ${limit} OFFSET ${offset}
     `;
 
-    const countQuery = `SELECT COUNT(*) as total FROM ${config.table} ${
-      mainAlias ? "AS " + mainAlias : ""
-    } ${whereSql}`;
+    const countQuery = `SELECT COUNT(*) as total FROM ${config.table} ${whereSql}`;
 
     try {
-      // console.log(`Executing: ${dataQuery}`);
       const [dataRes, countRes] = await Promise.all([
         this.pool.query(dataQuery, values),
         this.pool.query(countQuery, values),
@@ -163,8 +142,6 @@ export class MastersService {
         lastPage: Math.ceil(parseInt(countRes.rows[0]?.total || 0) / limit),
       };
     } catch (err) {
-      console.error("Database Query Error:", err.message);
-      console.error("Failed Query:", dataQuery);
       throw new InternalServerErrorException(err.message);
     }
   }
@@ -210,5 +187,69 @@ export class MastersService {
       console.error("Insert Error:", err.message);
       throw new InternalServerErrorException(`Insert Failed: ${err.message}`);
     }
+  }
+
+  // --- UPDATE (NEW) ---
+  async update(type: string, id: string, body: any) {
+    const config = this.tableMap[type];
+    if (!config) throw new BadRequestException(`Invalid Master Type: ${type}`);
+
+    this.normalizeBody(type, body);
+
+    const validKeys = Object.keys(body).filter((key) =>
+      config.cols.includes(key)
+    );
+    if (validKeys.length === 0)
+      throw new BadRequestException("No valid fields provided");
+
+    // Build SET clause: "col1 = $1, col2 = $2"
+    const setClause = validKeys
+      .map((key, i) => `${key} = $${i + 1}`)
+      .join(", ");
+    const values = validKeys.map((key) => body[key]);
+
+    // Add ID as the last parameter
+    values.push(id);
+
+    const sql = `UPDATE ${config.table} SET ${setClause} WHERE ${config.pk} = $${values.length} RETURNING *`;
+
+    try {
+      const res = await this.pool.query(sql, values);
+      if (res.rowCount === 0) throw new NotFoundException(`Record not found`);
+      return res.rows[0];
+    } catch (err) {
+      throw new InternalServerErrorException(err.message);
+    }
+  }
+
+  // --- DELETE (NEW) ---
+  async remove(type: string, id: string) {
+    const config = this.tableMap[type];
+    if (!config) throw new BadRequestException(`Invalid Master Type: ${type}`);
+
+    const sql = `DELETE FROM ${config.table} WHERE ${config.pk} = $1 RETURNING ${config.pk}`;
+
+    try {
+      const res = await this.pool.query(sql, [id]);
+      if (res.rowCount === 0) throw new NotFoundException(`Record not found`);
+      return { deleted: true, id };
+    } catch (err) {
+      // Handle Foreign Key constraints (e.g. trying to delete a Country used by a State)
+      if (err.code === "23503") {
+        throw new BadRequestException(
+          "Cannot delete: This record is used by other data."
+        );
+      }
+      throw new InternalServerErrorException(err.message);
+    }
+  }
+
+  // Helper to fix Frontend vs Backend naming mismatches
+  private normalizeBody(type: string, body: any) {
+    if (type === "STATE" && body.stateName) body.state = body.stateName;
+    if (type === "DISTRICT" && body.districtName)
+      body.district = body.districtName;
+    if (body.stateID) body.stateid = body.stateID;
+    if (body.districtID) body.districtid = body.districtID;
   }
 }

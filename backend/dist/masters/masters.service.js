@@ -78,17 +78,17 @@ let MastersService = class MastersService {
         let values = [];
         let paramIdx = 1;
         if (search) {
-            whereClauses.push(`${prefix(config.sort)} ILIKE $${paramIdx}`);
+            whereClauses.push(`${config.sort} ILIKE $${paramIdx}`);
             values.push(`%${search}%`);
             paramIdx++;
         }
         if (type === "STATE" && query.country_code) {
-            whereClauses.push(`${prefix("country_code")} = $${paramIdx}`);
+            whereClauses.push(`country_code = $${paramIdx}`);
             values.push(query.country_code);
             paramIdx++;
         }
         if (type === "DISTRICT" && query.stateID) {
-            whereClauses.push(`${prefix("stateid")} = $${paramIdx}`);
+            whereClauses.push(`stateid = $${paramIdx}`);
             values.push(query.stateID);
             paramIdx++;
         }
@@ -96,38 +96,25 @@ let MastersService = class MastersService {
         let selectSql = `SELECT * FROM ${config.table}`;
         if (type === "STATE") {
             selectSql = `
-        SELECT s.*, c.country as country_name
+        SELECT s.*, c.country as parent_name
         FROM mast_state s
         LEFT JOIN mast_country c ON s.country_code = c.country_code
       `;
         }
         else if (type === "DISTRICT") {
             selectSql = `
-        SELECT d.*, s.state as state_name, c.country as country_name
+        SELECT d.*, s.state as parent_name, s.country_code
         FROM mast_district d
         LEFT JOIN mast_state s ON d.stateid = s.stateid
-        LEFT JOIN mast_country c ON s.country_code = c.country_code
-      `;
-        }
-        else if (type === "PINCODE") {
-            selectSql = `
-        SELECT p.*, 
-               c.country as country_name, 
-               s.state as state_name, 
-               d.district as district_name
-        FROM mast_place p
-        LEFT JOIN mast_country c ON p.country_code = c.country_code
-        LEFT JOIN mast_state s ON p.stateid = s.stateid
-        LEFT JOIN mast_district d ON p.districtid = d.districtid
       `;
         }
         const dataQuery = `
       ${selectSql}
       ${whereSql}
-      ORDER BY ${prefix(config.pk)} DESC
+      ORDER BY ${config.pk} DESC
       LIMIT ${limit} OFFSET ${offset}
     `;
-        const countQuery = `SELECT COUNT(*) as total FROM ${config.table} ${mainAlias ? "AS " + mainAlias : ""} ${whereSql}`;
+        const countQuery = `SELECT COUNT(*) as total FROM ${config.table} ${whereSql}`;
         try {
             const [dataRes, countRes] = await Promise.all([
                 this.pool.query(dataQuery, values),
@@ -141,8 +128,6 @@ let MastersService = class MastersService {
             };
         }
         catch (err) {
-            console.error("Database Query Error:", err.message);
-            console.error("Failed Query:", dataQuery);
             throw new common_1.InternalServerErrorException(err.message);
         }
     }
@@ -179,6 +164,58 @@ let MastersService = class MastersService {
             console.error("Insert Error:", err.message);
             throw new common_1.InternalServerErrorException(`Insert Failed: ${err.message}`);
         }
+    }
+    async update(type, id, body) {
+        const config = this.tableMap[type];
+        if (!config)
+            throw new common_1.BadRequestException(`Invalid Master Type: ${type}`);
+        this.normalizeBody(type, body);
+        const validKeys = Object.keys(body).filter((key) => config.cols.includes(key));
+        if (validKeys.length === 0)
+            throw new common_1.BadRequestException("No valid fields provided");
+        const setClause = validKeys
+            .map((key, i) => `${key} = $${i + 1}`)
+            .join(", ");
+        const values = validKeys.map((key) => body[key]);
+        values.push(id);
+        const sql = `UPDATE ${config.table} SET ${setClause} WHERE ${config.pk} = $${values.length} RETURNING *`;
+        try {
+            const res = await this.pool.query(sql, values);
+            if (res.rowCount === 0)
+                throw new common_1.NotFoundException(`Record not found`);
+            return res.rows[0];
+        }
+        catch (err) {
+            throw new common_1.InternalServerErrorException(err.message);
+        }
+    }
+    async remove(type, id) {
+        const config = this.tableMap[type];
+        if (!config)
+            throw new common_1.BadRequestException(`Invalid Master Type: ${type}`);
+        const sql = `DELETE FROM ${config.table} WHERE ${config.pk} = $1 RETURNING ${config.pk}`;
+        try {
+            const res = await this.pool.query(sql, [id]);
+            if (res.rowCount === 0)
+                throw new common_1.NotFoundException(`Record not found`);
+            return { deleted: true, id };
+        }
+        catch (err) {
+            if (err.code === "23503") {
+                throw new common_1.BadRequestException("Cannot delete: This record is used by other data.");
+            }
+            throw new common_1.InternalServerErrorException(err.message);
+        }
+    }
+    normalizeBody(type, body) {
+        if (type === "STATE" && body.stateName)
+            body.state = body.stateName;
+        if (type === "DISTRICT" && body.districtName)
+            body.district = body.districtName;
+        if (body.stateID)
+            body.stateid = body.stateID;
+        if (body.districtID)
+            body.districtid = body.districtID;
     }
 };
 exports.MastersService = MastersService;

@@ -1,4 +1,13 @@
-import { Controller, Get, Post, Body, Query, Param } from "@nestjs/common";
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Query,
+  Param,
+  Put,
+  Delete,
+} from "@nestjs/common";
 import { MastersService } from "./masters.service";
 
 @Controller("api/masters")
@@ -13,5 +22,19 @@ export class MastersController {
   @Post(":type")
   async create(@Param("type") type: string, @Body() body: any) {
     return this.mastersService.create(type.toUpperCase(), body);
+  }
+
+  @Put(":type/:id")
+  async update(
+    @Param("type") type: string,
+    @Param("id") id: string,
+    @Body() body: any
+  ) {
+    return this.mastersService.update(type.toUpperCase(), id, body);
+  }
+
+  @Delete(":type/:id")
+  async remove(@Param("type") type: string, @Param("id") id: string) {
+    return this.mastersService.remove(type.toUpperCase(), id);
   }
 }

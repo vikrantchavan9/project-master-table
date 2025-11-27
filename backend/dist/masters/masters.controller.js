@@ -25,6 +25,12 @@ let MastersController = class MastersController {
     async create(type, body) {
         return this.mastersService.create(type.toUpperCase(), body);
     }
+    async update(type, id, body) {
+        return this.mastersService.update(type.toUpperCase(), id, body);
+    }
+    async remove(type, id) {
+        return this.mastersService.remove(type.toUpperCase(), id);
+    }
 };
 exports.MastersController = MastersController;
 __decorate([
@@ -43,6 +49,23 @@ __decorate([
     __metadata("design:paramtypes", [String, Object]),
     __metadata("design:returntype", Promise)
 ], MastersController.prototype, "create", null);
+__decorate([
+    (0, common_1.Put)(":type/:id"),
+    __param(0, (0, common_1.Param)("type")),
+    __param(1, (0, common_1.Param)("id")),
+    __param(2, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, Object]),
+    __metadata("design:returntype", Promise)
+], MastersController.prototype, "update", null);
+__decorate([
+    (0, common_1.Delete)(":type/:id"),
+    __param(0, (0, common_1.Param)("type")),
+    __param(1, (0, common_1.Param)("id")),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:returntype", Promise)
+], MastersController.prototype, "remove", null);
 exports.MastersController = MastersController = __decorate([
     (0, common_1.Controller)("api/masters"),
     __metadata("design:paramtypes", [masters_service_1.MastersService])

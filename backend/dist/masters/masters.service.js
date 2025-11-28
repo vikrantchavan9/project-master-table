@@ -15,48 +15,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.MastersService = void 0;
 const common_1 = require("@nestjs/common");
 const pg_1 = require("pg");
+const masters_config_1 = require("./masters.config");
 let MastersService = class MastersService {
     constructor(pool) {
         this.pool = pool;
-        this.tableMap = {
-            COUNTRY: {
-                table: "mast_country",
-                pk: "country_code",
-                sort: "country",
-                cols: ["country_code", "country", "advisor"],
-            },
-            STATE: {
-                table: "mast_state",
-                pk: "stateid",
-                sort: "state",
-                cols: ["state", "country_code", "advisor", "state_code", "region"],
-            },
-            DISTRICT: {
-                table: "mast_district",
-                pk: "districtid",
-                sort: "district",
-                cols: ["district", "stateid", "advisor"],
-            },
-            PINCODE: {
-                table: "mast_place",
-                pk: "placeid",
-                sort: "place",
-                cols: [
-                    "country_code",
-                    "stateid",
-                    "districtid",
-                    "pincode",
-                    "place",
-                    "advisor",
-                ],
-            },
-            SKILLS: {
-                table: "mast_skills",
-                pk: "mastid",
-                sort: "optionname",
-                cols: ["optionname"],
-            },
-        };
+        this.tableMap = masters_config_1.MASTER_DB_CONFIG;
     }
     async findAll(type, query) {
         const config = this.tableMap[type];
@@ -66,30 +29,34 @@ let MastersService = class MastersService {
         const limit = parseInt(query.limit) || 10;
         const offset = (page - 1) * limit;
         const search = query.search || "";
-        let mainAlias = "";
-        if (type === "STATE")
-            mainAlias = "s";
-        else if (type === "DISTRICT")
-            mainAlias = "d";
-        else if (type === "PINCODE")
-            mainAlias = "p";
-        const prefix = (col) => (mainAlias ? `${mainAlias}.${col}` : col);
+        const alias = type === "STATE" ? "s" : type === "DISTRICT" ? "d" : "";
+        const prefix = alias ? `${alias}.` : "";
         let whereClauses = [];
         let values = [];
         let paramIdx = 1;
         if (search) {
-            whereClauses.push(`${config.sort} ILIKE $${paramIdx}`);
+            whereClauses.push(`${prefix}${config.sort} ILIKE $${paramIdx}`);
             values.push(`%${search}%`);
             paramIdx++;
         }
         if (type === "STATE" && query.country_code) {
-            whereClauses.push(`country_code = $${paramIdx}`);
+            whereClauses.push(`s.country_code = $${paramIdx}`);
             values.push(query.country_code);
             paramIdx++;
         }
         if (type === "DISTRICT" && query.stateID) {
-            whereClauses.push(`stateid = $${paramIdx}`);
+            whereClauses.push(`d.stateid = $${paramIdx}`);
             values.push(query.stateID);
+            paramIdx++;
+        }
+        if (type === "DISTRICT" && query.country_code) {
+            whereClauses.push(`s.country_code = $${paramIdx}`);
+            values.push(query.country_code);
+            paramIdx++;
+        }
+        if (type === "PINCODE" && query.districtID) {
+            whereClauses.push(`districtid = $${paramIdx}`);
+            values.push(query.districtID);
             paramIdx++;
         }
         const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
@@ -111,10 +78,10 @@ let MastersService = class MastersService {
         const dataQuery = `
       ${selectSql}
       ${whereSql}
-      ORDER BY ${config.pk} DESC
+      ORDER BY ${prefix}${config.sort} ASC  -- <--- FIXED: Added prefix to sort too
       LIMIT ${limit} OFFSET ${offset}
     `;
-        const countQuery = `SELECT COUNT(*) as total FROM ${config.table} ${whereSql}`;
+        const countQuery = `SELECT COUNT(*) as total FROM ${config.table} ${alias} ${whereSql}`;
         try {
             const [dataRes, countRes] = await Promise.all([
                 this.pool.query(dataQuery, values),
@@ -135,23 +102,10 @@ let MastersService = class MastersService {
         const config = this.tableMap[type];
         if (!config)
             throw new common_1.BadRequestException(`Invalid Master Type: ${type}`);
-        if (type === "STATE" && body.stateName) {
-            body.state = body.stateName;
-        }
-        if (type === "DISTRICT" && body.districtName) {
-            body.district = body.districtName;
-        }
-        if (body.stateID) {
-            body.stateid = body.stateID;
-        }
-        if (body.districtID) {
-            body.districtid = body.districtID;
-        }
+        this.normalizeBody(type, body);
         const validKeys = Object.keys(body).filter((key) => config.cols.includes(key));
-        if (validKeys.length === 0) {
-            console.error("Invalid Body Received:", body);
+        if (validKeys.length === 0)
             throw new common_1.BadRequestException("No valid fields provided");
-        }
         const columns = validKeys.join(", ");
         const placeholders = validKeys.map((_, i) => `$${i + 1}`).join(", ");
         const values = validKeys.map((key) => body[key]);
@@ -161,8 +115,8 @@ let MastersService = class MastersService {
             return res.rows[0];
         }
         catch (err) {
-            console.error("Insert Error:", err.message);
-            throw new common_1.InternalServerErrorException(`Insert Failed: ${err.message}`);
+            console.error(err);
+            throw new common_1.InternalServerErrorException(err.message);
         }
     }
     async update(type, id, body) {

@@ -6,105 +6,80 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { Pool } from "pg";
-
-interface MasterConfig {
-  table: string;
-  pk: string;
-  sort: string;
-  cols: string[];
-}
+import { MASTER_DB_CONFIG } from "./masters.config";
 
 @Injectable()
 export class MastersService {
   constructor(@Inject("DATABASE_POOL") private pool: Pool) {}
 
-  // 1. Configuration
-  private tableMap: Record<string, MasterConfig> = {
-    COUNTRY: {
-      table: "mast_country",
-      pk: "country_code",
-      sort: "country",
-      cols: ["country_code", "country", "advisor"],
-    },
-    STATE: {
-      table: "mast_state",
-      pk: "stateid",
-      sort: "state",
-      cols: ["state", "country_code", "advisor", "state_code", "region"],
-    },
-    DISTRICT: {
-      table: "mast_district",
-      pk: "districtid",
-      sort: "district",
-      cols: ["district", "stateid", "advisor"],
-    },
-    PINCODE: {
-      table: "mast_place",
-      pk: "placeid",
-      sort: "place",
-      cols: [
-        "country_code",
-        "stateid",
-        "districtid",
-        "pincode",
-        "place",
-        "advisor",
-      ],
-    },
-    SKILLS: {
-      table: "mast_skills",
-      pk: "mastid",
-      sort: "optionname",
-      cols: ["optionname"],
-    },
-  };
+  // Configuration
+  private tableMap = MASTER_DB_CONFIG;
 
   async findAll(type: string, query: any) {
     const config = this.tableMap[type];
     if (!config) throw new BadRequestException(`Invalid Master Type: ${type}`);
 
+    // Pagination & Sorting Defaults
     const page = parseInt(query.page) || 1;
     const limit = parseInt(query.limit) || 10;
     const offset = (page - 1) * limit;
     const search = query.search || "";
 
-    // --- Alias Map ---
-    let mainAlias = "";
-    if (type === "STATE") mainAlias = "s";
-    else if (type === "DISTRICT") mainAlias = "d";
-    else if (type === "PINCODE") mainAlias = "p";
-
-    // Helper to prefix column with alias if alias exists
-    const prefix = (col: string) => (mainAlias ? `${mainAlias}.${col}` : col);
+    // Define Table Alias to prevent Ambiguity Errors (s=state, d=district)
+    // We use this alias for WHERE, SORT and COUNT clauses.
+    const alias = type === "STATE" ? "s" : type === "DISTRICT" ? "d" : "";
+    const prefix = alias ? `${alias}.` : "";
 
     // --- Dynamic WHERE Clause ---
     let whereClauses: string[] = [];
     let values: any[] = [];
     let paramIdx = 1;
 
+    // A. Search Filter
     if (search) {
-      whereClauses.push(`${config.sort} ILIKE $${paramIdx}`);
+      whereClauses.push(`${prefix}${config.sort} ILIKE $${paramIdx}`);
       values.push(`%${search}%`);
       paramIdx++;
     }
 
+    // B. Context Filters
+
+    // Filter States by Country
     if (type === "STATE" && query.country_code) {
-      whereClauses.push(`country_code = $${paramIdx}`);
+      whereClauses.push(`s.country_code = $${paramIdx}`); // <--- FIXED: Added 's.'
       values.push(query.country_code);
       paramIdx++;
     }
+
+    // Filter Districts by State
     if (type === "DISTRICT" && query.stateID) {
-      whereClauses.push(`stateid = $${paramIdx}`);
+      whereClauses.push(`d.stateid = $${paramIdx}`); // <--- FIXED: Added 'd.'
       values.push(query.stateID);
+      paramIdx++;
+    }
+
+    // Filter Districts by Country (Optional, but good for grid filtering)
+    if (type === "DISTRICT" && query.country_code) {
+      // Since we join state (s), we can filter by s.country_code
+      whereClauses.push(`s.country_code = $${paramIdx}`);
+      values.push(query.country_code);
+      paramIdx++;
+    }
+
+    // Pincode Filters
+    if (type === "PINCODE" && query.districtID) {
+      whereClauses.push(`districtid = $${paramIdx}`);
+      values.push(query.districtID);
       paramIdx++;
     }
 
     const whereSql =
       whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
 
+    // --- 2. Build SELECT Query ---
     let selectSql = `SELECT * FROM ${config.table}`;
 
-    // JOIN LOGIC: Ensure we fetch parent IDs so the Edit Form works
+    // Define Joins
     if (type === "STATE") {
       selectSql = `
         SELECT s.*, c.country as parent_name
@@ -112,7 +87,6 @@ export class MastersService {
         LEFT JOIN mast_country c ON s.country_code = c.country_code
       `;
     } else if (type === "DISTRICT") {
-      // Fetch 'country_code' from state so cascading dropdowns work on Edit
       selectSql = `
         SELECT d.*, s.state as parent_name, s.country_code
         FROM mast_district d
@@ -120,14 +94,15 @@ export class MastersService {
       `;
     }
 
+    // --- 3. Run Query ---
     const dataQuery = `
       ${selectSql}
       ${whereSql}
-      ORDER BY ${config.pk} DESC
+      ORDER BY ${prefix}${config.sort} ASC  -- <--- FIXED: Added prefix to sort too
       LIMIT ${limit} OFFSET ${offset}
     `;
 
-    const countQuery = `SELECT COUNT(*) as total FROM ${config.table} ${whereSql}`;
+    const countQuery = `SELECT COUNT(*) as total FROM ${config.table} ${alias} ${whereSql}`;
 
     try {
       const [dataRes, countRes] = await Promise.all([
@@ -146,34 +121,21 @@ export class MastersService {
     }
   }
 
+  // --- GENERIC CREATE ---
   async create(type: string, body: any) {
     const config = this.tableMap[type];
     if (!config) throw new BadRequestException(`Invalid Master Type: ${type}`);
 
-    // --- Data Transformation ---
-    if (type === "STATE" && body.stateName) {
-      body.state = body.stateName;
-    }
-    if (type === "DISTRICT" && body.districtName) {
-      body.district = body.districtName;
-    }
+    this.normalizeBody(type, body);
 
-    if (body.stateID) {
-      body.stateid = body.stateID;
-    }
-    if (body.districtID) {
-      body.districtid = body.districtID;
-    }
-
+    // Validate fields against Config
     const validKeys = Object.keys(body).filter((key) =>
       config.cols.includes(key)
     );
-
-    if (validKeys.length === 0) {
-      console.error("Invalid Body Received:", body);
+    if (validKeys.length === 0)
       throw new BadRequestException("No valid fields provided");
-    }
 
+    // Build Insert Query
     const columns = validKeys.join(", ");
     const placeholders = validKeys.map((_, i) => `$${i + 1}`).join(", ");
     const values = validKeys.map((key) => body[key]);
@@ -184,12 +146,12 @@ export class MastersService {
       const res = await this.pool.query(sql, values);
       return res.rows[0];
     } catch (err) {
-      console.error("Insert Error:", err.message);
-      throw new InternalServerErrorException(`Insert Failed: ${err.message}`);
+      console.error(err);
+      throw new InternalServerErrorException(err.message);
     }
   }
 
-  // --- UPDATE (NEW) ---
+  // --- GENERIC UPDATE ---
   async update(type: string, id: string, body: any) {
     const config = this.tableMap[type];
     if (!config) throw new BadRequestException(`Invalid Master Type: ${type}`);
@@ -202,13 +164,11 @@ export class MastersService {
     if (validKeys.length === 0)
       throw new BadRequestException("No valid fields provided");
 
-    // Build SET clause: "col1 = $1, col2 = $2"
+    // Build Update Query (col1 = $1, col2 = $2)
     const setClause = validKeys
       .map((key, i) => `${key} = $${i + 1}`)
       .join(", ");
     const values = validKeys.map((key) => body[key]);
-
-    // Add ID as the last parameter
     values.push(id);
 
     const sql = `UPDATE ${config.table} SET ${setClause} WHERE ${config.pk} = $${values.length} RETURNING *`;
@@ -222,7 +182,7 @@ export class MastersService {
     }
   }
 
-  // --- DELETE (NEW) ---
+  // --- GENERIC DELETE ---
   async remove(type: string, id: string) {
     const config = this.tableMap[type];
     if (!config) throw new BadRequestException(`Invalid Master Type: ${type}`);
@@ -234,8 +194,8 @@ export class MastersService {
       if (res.rowCount === 0) throw new NotFoundException(`Record not found`);
       return { deleted: true, id };
     } catch (err) {
-      // Handle Foreign Key constraints (e.g. trying to delete a Country used by a State)
       if (err.code === "23503") {
+        // Foreign Key Violation code
         throw new BadRequestException(
           "Cannot delete: This record is used by other data."
         );
@@ -244,7 +204,7 @@ export class MastersService {
     }
   }
 
-  // Helper to fix Frontend vs Backend naming mismatches
+  // Helper: Standardize Frontend inputs to Database Column names
   private normalizeBody(type: string, body: any) {
     if (type === "STATE" && body.stateName) body.state = body.stateName;
     if (type === "DISTRICT" && body.districtName)

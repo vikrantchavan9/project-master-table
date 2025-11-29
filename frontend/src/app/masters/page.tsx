@@ -59,7 +59,9 @@ export default function MasterEntry() {
 
       const res = await fetch(`${API_URL}/${selectedMasterKey}?${params}`);
       const data = await res.json();
+
       setTableData(data.data || []);
+
       setPagination((prev) => ({
         ...prev,
         total: data.total || 0,
@@ -109,7 +111,7 @@ export default function MasterEntry() {
         loadLookup(field.lookupMaster);
       }
     });
-  }, [selectedMasterKey]);
+  }, [selectedMasterKey, pagination.page]);
 
   // Handle Cascading Dropdowns (Dependent Lookups)
   useEffect(() => {

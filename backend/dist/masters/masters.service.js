@@ -29,7 +29,13 @@ let MastersService = class MastersService {
         const limit = parseInt(query.limit) || 10;
         const offset = (page - 1) * limit;
         const search = query.search || "";
-        const alias = type === "STATE" ? "s" : type === "DISTRICT" ? "d" : "";
+        const alias = type === "STATE"
+            ? "s"
+            : type === "DISTRICT"
+                ? "d"
+                : type === "PINCODE_MASTER"
+                    ? "p"
+                    : "";
         const prefix = alias ? `${alias}.` : "";
         let whereClauses = [];
         let values = [];
@@ -44,20 +50,34 @@ let MastersService = class MastersService {
             values.push(query.country_code);
             paramIdx++;
         }
-        if (type === "DISTRICT" && query.stateID) {
-            whereClauses.push(`d.stateid = $${paramIdx}`);
-            values.push(query.stateID);
-            paramIdx++;
+        if (type === "DISTRICT") {
+            if (query.state_code) {
+                whereClauses.push(`d.state_code = $${paramIdx}`);
+                values.push(query.state_code);
+                paramIdx++;
+            }
+            if (query.state) {
+                whereClauses.push(`s.state = $${paramIdx}`);
+                values.push(query.state);
+                paramIdx++;
+            }
+            if (query.country_code) {
+                whereClauses.push(`d.country_code = $${paramIdx}`);
+                values.push(query.country_code);
+                paramIdx++;
+            }
         }
-        if (type === "DISTRICT" && query.country_code) {
-            whereClauses.push(`s.country_code = $${paramIdx}`);
-            values.push(query.country_code);
-            paramIdx++;
-        }
-        if (type === "PINCODE" && query.districtID) {
-            whereClauses.push(`districtid = $${paramIdx}`);
-            values.push(query.districtID);
-            paramIdx++;
+        if (type === "PINCODE_MASTER") {
+            if (query.district) {
+                whereClauses.push(`p.district = $${paramIdx}`);
+                values.push(query.district);
+                paramIdx++;
+            }
+            if (query.state) {
+                whereClauses.push(`p.state = $${paramIdx}`);
+                values.push(query.state);
+                paramIdx++;
+            }
         }
         const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
         let selectSql = `SELECT * FROM ${config.table}`;
@@ -70,9 +90,16 @@ let MastersService = class MastersService {
         }
         else if (type === "DISTRICT") {
             selectSql = `
-        SELECT d.*, s.state as parent_name, s.country_code
+        SELECT d.*, s.state as parent_name
         FROM mast_district d
-        LEFT JOIN mast_state s ON d.stateid = s.stateid
+        LEFT JOIN mast_state s ON d.state_code = s.state_code AND d.country_code = s.country_code
+      `;
+        }
+        else if (type === "PINCODE_MASTER") {
+            selectSql = `
+        SELECT p.*, c.country as country_name
+        FROM mast_pincode p
+        LEFT JOIN mast_country c ON p.country_code = c.country_code
       `;
         }
         const dataQuery = `
@@ -89,9 +116,9 @@ let MastersService = class MastersService {
             ]);
             return {
                 data: dataRes.rows,
-                total: parseInt(countRes.rows[0]?.total || 0),
+                total: parseInt(countRes.rows[0]?.total || "0"),
                 page,
-                lastPage: Math.ceil(parseInt(countRes.rows[0]?.total || 0) / limit),
+                lastPage: Math.ceil(parseInt(countRes.rows[0]?.total || "0") / limit),
             };
         }
         catch (err) {

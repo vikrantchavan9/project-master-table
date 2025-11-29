@@ -6,6 +6,7 @@ export interface FieldDef {
   type: FieldType;
   lookupMaster?: string; // If type is dropdown, which master to load? (e.g., 'COUNTRY')
   parentField?: string; // If dependent, who is the parent? (e.g., 'country_code')
+  valueKey?: string;
   required?: boolean;
   maxLength?: number;
 }
@@ -17,8 +18,8 @@ export interface MasterUIDef {
   columns: { key: string; label: string }[]; // Table Columns
 }
 
+// --- COMPLEX MASTERS ---
 export const MASTERS_CONFIG: Record<string, MasterUIDef> = {
-  // --- COMPLEX MASTERS ---
   // Country Master
   COUNTRY: {
     label: "Country Master",
@@ -92,6 +93,57 @@ export const MASTERS_CONFIG: Record<string, MasterUIDef> = {
       { key: "parent_name", label: "State" },
     ],
   },
+  PINCODE_MASTER: {
+    label: "Pincode Master",
+    pk: "pinid",
+    fields: [
+      {
+        name: "country_code",
+        label: "Country",
+        type: "dropdown",
+        lookupMaster: "COUNTRY",
+        valueKey: "country_code",
+        required: true,
+      },
+
+      // 1. STATE uses 'state' (Name) as value
+      {
+        name: "state",
+        label: "State",
+        type: "dropdown",
+        lookupMaster: "STATE",
+        parentField: "country_code",
+        valueKey: "state",
+        required: true,
+      },
+
+      // 2. DISTRICT uses 'district' (Name) as value.
+      // FIXED: parentField is 'state' (referencing field above), NOT 'state_code'
+      {
+        name: "district",
+        label: "District",
+        type: "dropdown",
+        lookupMaster: "DISTRICT",
+        parentField: "state",
+        valueKey: "district",
+        required: true,
+      },
+
+      {
+        name: "postoffice",
+        label: "Post Office",
+        type: "text",
+        required: true,
+      },
+      { name: "pincode", label: "Pin Code", type: "text", required: true },
+    ],
+    columns: [
+      { key: "pincode", label: "Pin" },
+      { key: "postoffice", label: "Post Office" },
+      { key: "district", label: "District" },
+      { key: "state", label: "State" },
+    ],
+  },
   INDUSTRY: {
     label: "Industry Master",
     pk: "mastid",
@@ -100,23 +152,4 @@ export const MASTERS_CONFIG: Record<string, MasterUIDef> = {
     ],
     columns: [{ key: "option", label: "Industry Name" }],
   },
-
-  // --- SIMPLE MASTERS (Add 20+ easily here) ---
-  //   SKILLS: {
-  //     label: "Skills Master",
-  //     pk: "mastid",
-  //     fields: [
-  //       { name: "option", label: "Skill Name", type: "text", required: true },
-  //     ],
-  //     columns: [{ key: "option", label: "Skill Name" }],
-  //   },
-
-  //   OCCUPATION: {
-  //     label: "Occupation Master",
-  //     pk: "occuid",
-  //     fields: [
-  //       { name: "occupation", label: "Occupation", type: "text", required: true },
-  //     ],
-  //     columns: [{ key: "occupation", label: "Occupation" }],
-  //   },
 };

@@ -24,18 +24,18 @@ export const MASTER_DB_CONFIG: Record<string, MasterConfig> = {
     table: "mast_district",
     pk: "districtid",
     sort: "district",
-    cols: ["district", "stateid", "advisor"],
+    cols: ["district", "state_code", "country_code", "advisor"],
   },
-  PINCODE: {
-    table: "mast_place",
-    pk: "placeid",
-    sort: "place",
+  PINCODE_MASTER: {
+    table: "mast_pincode",
+    pk: "pinid",
+    sort: "postoffice",
     cols: [
-      "country_code",
-      "stateid",
-      "districtid",
       "pincode",
-      "place",
+      "postoffice",
+      "district",
+      "state",
+      "country_code",
       "advisor",
     ],
   },
@@ -45,26 +45,4 @@ export const MASTER_DB_CONFIG: Record<string, MasterConfig> = {
     sort: "option",
     cols: ["option"],
   },
-
-  // --- SIMPLE MASTERS (From your PDF) ---
-  // You can now just add one line here to support a new table!
-
-  //   OCCUPATION: {
-  //     table: "mast_occupation",
-  //     pk: "occuid",
-  //     sort: "occupation",
-  //     cols: ["occupation"],
-  //   },
-  //   LANGUAGE: {
-  //     table: "mast_lang",
-  //     pk: "langid",
-  //     sort: "language",
-  //     cols: ["language"],
-  //   },
-  //     SKILLS: {
-  //     table: "mast_skills",
-  //     pk: "mastid",
-  //     sort: "option",
-  //     cols: ["option"],
-  //   },
 };

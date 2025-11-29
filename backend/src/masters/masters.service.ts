@@ -27,7 +27,14 @@ export class MastersService {
 
     // Define Table Alias to prevent Ambiguity Errors (s=state, d=district)
     // We use this alias for WHERE, SORT and COUNT clauses.
-    const alias = type === "STATE" ? "s" : type === "DISTRICT" ? "d" : "";
+    const alias =
+      type === "STATE"
+        ? "s"
+        : type === "DISTRICT"
+        ? "d"
+        : type === "PINCODE_MASTER"
+        ? "p"
+        : "";
     const prefix = alias ? `${alias}.` : "";
 
     // --- Dynamic WHERE Clause ---
@@ -52,25 +59,40 @@ export class MastersService {
     }
 
     // Filter Districts by State
-    if (type === "DISTRICT" && query.stateID) {
-      whereClauses.push(`d.stateid = $${paramIdx}`); // <--- FIXED: Added 'd.'
-      values.push(query.stateID);
-      paramIdx++;
-    }
-
-    // Filter Districts by Country (Optional, but good for grid filtering)
-    if (type === "DISTRICT" && query.country_code) {
-      // Since we join state (s), we can filter by s.country_code
-      whereClauses.push(`s.country_code = $${paramIdx}`);
-      values.push(query.country_code);
-      paramIdx++;
+    if (type === "DISTRICT") {
+      // A. Filter by State Code (Standard District Master)
+      if (query.state_code) {
+        whereClauses.push(`d.state_code = $${paramIdx}`);
+        values.push(query.state_code);
+        paramIdx++;
+      }
+      // B. Filter by State Name (For Pincode Master Dropdown) <<-- NEW LOGIC
+      if (query.state) {
+        whereClauses.push(`s.state = $${paramIdx}`);
+        values.push(query.state);
+        paramIdx++;
+      }
+      // C. Filter by Country
+      if (query.country_code) {
+        whereClauses.push(`d.country_code = $${paramIdx}`);
+        values.push(query.country_code);
+        paramIdx++;
+      }
     }
 
     // Pincode Filters
-    if (type === "PINCODE" && query.districtID) {
-      whereClauses.push(`districtid = $${paramIdx}`);
-      values.push(query.districtID);
-      paramIdx++;
+    if (type === "PINCODE_MASTER") {
+      if (query.district) {
+        whereClauses.push(`p.district = $${paramIdx}`);
+        values.push(query.district);
+        paramIdx++;
+      }
+      // If filtering by State Name
+      if (query.state) {
+        whereClauses.push(`p.state = $${paramIdx}`);
+        values.push(query.state);
+        paramIdx++;
+      }
     }
 
     const whereSql =
@@ -81,16 +103,26 @@ export class MastersService {
 
     // Define Joins
     if (type === "STATE") {
+      // Join to show Country Name
       selectSql = `
         SELECT s.*, c.country as parent_name
         FROM mast_state s
         LEFT JOIN mast_country c ON s.country_code = c.country_code
       `;
     } else if (type === "DISTRICT") {
+      // Join on STATE_CODE (Not ID)
       selectSql = `
-        SELECT d.*, s.state as parent_name, s.country_code
+        SELECT d.*, s.state as parent_name
         FROM mast_district d
-        LEFT JOIN mast_state s ON d.stateid = s.stateid
+        LEFT JOIN mast_state s ON d.state_code = s.state_code AND d.country_code = s.country_code
+      `;
+    } else if (type === "PINCODE_MASTER") {
+      // No joins needed! The table already has 'state' and 'district' names.
+      // We just join Country for the country name.
+      selectSql = `
+        SELECT p.*, c.country as country_name
+        FROM mast_pincode p
+        LEFT JOIN mast_country c ON p.country_code = c.country_code
       `;
     }
 
@@ -109,12 +141,11 @@ export class MastersService {
         this.pool.query(dataQuery, values),
         this.pool.query(countQuery, values),
       ]);
-
       return {
         data: dataRes.rows,
-        total: parseInt(countRes.rows[0]?.total || 0),
+        total: parseInt(countRes.rows[0]?.total || "0"),
         page,
-        lastPage: Math.ceil(parseInt(countRes.rows[0]?.total || 0) / limit),
+        lastPage: Math.ceil(parseInt(countRes.rows[0]?.total || "0") / limit),
       };
     } catch (err) {
       throw new InternalServerErrorException(err.message);

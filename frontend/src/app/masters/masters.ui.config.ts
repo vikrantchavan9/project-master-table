@@ -1,26 +1,28 @@
 export type FieldType = "text" | "number" | "dropdown";
 
 export interface FieldDef {
-  name: string; // The key to send to backend (e.g., 'country_code')
-  label: string; // UI Label
+  name: string;
+  label: string;
   type: FieldType;
-  lookupMaster?: string; // If type is dropdown, which master to load? (e.g., 'COUNTRY')
-  parentField?: string; // If dependent, who is the parent? (e.g., 'country_code')
-  valueKey?: string;
+  lookupMaster?: string;
+  parentField?: string;
+  valueKey?: string; // <-- already present
   required?: boolean;
   maxLength?: number;
 }
 
 export interface MasterUIDef {
   label: string;
-  pk: string; // Primary Key field name (e.g., 'country_code')
-  fields: FieldDef[]; // Form Fields
-  columns: { key: string; label: string }[]; // Table Columns
+  pk: string;
+  fields: FieldDef[];
+  columns: { key: string; label: string }[];
 }
 
 // --- COMPLEX MASTERS ---
 export const MASTERS_CONFIG: Record<string, MasterUIDef> = {
-  // Country Master
+  // --------------------------------------------------------------------
+  // COUNTRY
+  // --------------------------------------------------------------------
   COUNTRY: {
     label: "Country Master",
     pk: "country_code",
@@ -41,10 +43,13 @@ export const MASTERS_CONFIG: Record<string, MasterUIDef> = {
       { key: "advisor", label: "Advisor" },
     ],
   },
-  // State Master
+
+  // --------------------------------------------------------------------
+  // STATE
+  // --------------------------------------------------------------------
   STATE: {
     label: "State Master",
-    pk: "state_code",
+    pk: "stateid", // correct PK
     fields: [
       {
         name: "country_code",
@@ -52,16 +57,33 @@ export const MASTERS_CONFIG: Record<string, MasterUIDef> = {
         type: "dropdown",
         lookupMaster: "COUNTRY",
         required: true,
+        valueKey: "country_code",
       },
+
+      // -----------------------------
+      // 🔥 ADDED MISSING FIELD
+      // Each state MUST have state_code (AP, MH...)
+      // -----------------------------
+      {
+        name: "state_code",
+        label: "State Code",
+        type: "text",
+        required: true,
+      },
+
       { name: "state", label: "State Name", type: "text", required: true },
       { name: "advisor", label: "Advisor ID", type: "number" },
     ],
     columns: [
+      { key: "state_code", label: "Code" },
       { key: "state", label: "State" },
-      { key: "parent_name", label: "Country" }, // Backend returns 'parent_name' from JOIN
+      { key: "parent_name", label: "Country" },
     ],
   },
-  // District Master
+
+  // --------------------------------------------------------------------
+  // DISTRICT
+  // --------------------------------------------------------------------
   DISTRICT: {
     label: "District Master",
     pk: "districtid",
@@ -72,6 +94,7 @@ export const MASTERS_CONFIG: Record<string, MasterUIDef> = {
         type: "dropdown",
         lookupMaster: "COUNTRY",
         required: true,
+        valueKey: "country_code", // 🔥 ADDED
       },
       {
         name: "state_code",
@@ -80,6 +103,7 @@ export const MASTERS_CONFIG: Record<string, MasterUIDef> = {
         lookupMaster: "STATE",
         parentField: "country_code",
         required: true,
+        valueKey: "state_code", // 🔥 FIXED
       },
       {
         name: "district",
@@ -93,10 +117,15 @@ export const MASTERS_CONFIG: Record<string, MasterUIDef> = {
       { key: "parent_name", label: "State" },
     ],
   },
+
+  // --------------------------------------------------------------------
+  // PINCODE MASTER
+  // --------------------------------------------------------------------
   PINCODE_MASTER: {
     label: "Pincode Master",
     pk: "pinid",
     fields: [
+      // Country
       {
         name: "country_code",
         label: "Country",
@@ -106,29 +135,34 @@ export const MASTERS_CONFIG: Record<string, MasterUIDef> = {
         required: true,
       },
 
-      // 1. STATE uses 'state' (Name) as value
+      // ----------------------------------------------------
+      // 🔥 FIX: STATE must return state_code, not full state name
+      // ----------------------------------------------------
       {
-        name: "state",
+        name: "state_code",
         label: "State",
         type: "dropdown",
         lookupMaster: "STATE",
         parentField: "country_code",
-        valueKey: "state",
+        valueKey: "state_code", // 🔥 CHANGED
         required: true,
       },
 
-      // 2. DISTRICT uses 'district' (Name) as value.
-      // FIXED: parentField is 'state' (referencing field above), NOT 'state_code'
+      // ----------------------------------------------------
+      // 🔥 FIX: DISTRICT should depend on `state_code`, not `state`
+      // and value should be districtid (unique)
+      // ----------------------------------------------------
       {
         name: "district",
         label: "District",
         type: "dropdown",
         lookupMaster: "DISTRICT",
-        parentField: "state",
-        valueKey: "district",
+        parentField: "state_code", // 🔥 FIXED
+        valueKey: "district", // or "districtid" if backend expects ID
         required: true,
       },
 
+      // remaining fields
       {
         name: "postoffice",
         label: "Post Office",
@@ -144,6 +178,10 @@ export const MASTERS_CONFIG: Record<string, MasterUIDef> = {
       { key: "state", label: "State" },
     ],
   },
+
+  // --------------------------------------------------------------------
+  // INDUSTRY
+  // --------------------------------------------------------------------
   INDUSTRY: {
     label: "Industry Master",
     pk: "mastid",

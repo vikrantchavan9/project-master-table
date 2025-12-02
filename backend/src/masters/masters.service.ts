@@ -25,17 +25,17 @@ export class MastersService {
     const offset = (page - 1) * limit;
     const search = query.search || "";
 
-    // Define Table Alias to prevent Ambiguity Errors (s=state, d=district)
     // We use this alias for WHERE, SORT and COUNT clauses.
-    const alias =
-      type === "STATE"
-        ? "s"
-        : type === "DISTRICT"
-        ? "d"
-        : type === "PINCODE_MASTER"
-        ? "p"
-        : "";
-    const prefix = alias ? `${alias}.` : "";
+    const aliasMap: Record<string, string> = {
+      COUNTRY: "c",
+      STATE: "s",
+      DISTRICT: "d",
+      PINCODE_MASTER: "p",
+    };
+
+    // Default to empty string for simple tables (Skills, etc), specific char for hierarchies
+    const mainAlias = aliasMap[type] || "m";
+    const prefix = `${mainAlias}.`;
 
     // --- Dynamic WHERE Clause ---
     let whereClauses: string[] = [];
@@ -49,47 +49,54 @@ export class MastersService {
       paramIdx++;
     }
 
-    // B. Context Filters
-
-    // Filter States by Country
+    // [STATE MASTER]: Filter by Country Code
+    // Used when selecting a Country in the State form.
     if (type === "STATE" && query.country_code) {
-      whereClauses.push(`s.country_code = $${paramIdx}`); // <--- FIXED: Added 's.'
+      whereClauses.push(`TRIM(s.country_code) = TRIM($${paramIdx})`);
       values.push(query.country_code);
       paramIdx++;
     }
 
-    // Filter Districts by State
+    // [DISTRICT MASTER]: Filter Logic
     if (type === "DISTRICT") {
-      // A. Filter by State Code (Standard District Master)
+      // console.log("📌 [SERVICE] DISTRICT Query:", query);
+      // console.log("📌 [SERVICE] state_code received:", query.state_code);
+      // console.log("📌 [SERVICE] state (name) received:", query.state);
+      // console.log("📌 [SERVICE] country_code received:", query.country_code);
+
+      // Filter by State Code (Code-based)
       if (query.state_code) {
-        whereClauses.push(`d.state_code = $${paramIdx}`);
+        // FIX: Add TRIM() to handle 'TS ' vs 'TS' mismatch
+        whereClauses.push(`TRIM(d.state_code) = TRIM($${paramIdx})`);
         values.push(query.state_code);
         paramIdx++;
       }
-      // B. Filter by State Name (For Pincode Master Dropdown) <<-- NEW LOGIC
+      // Filter by State Name (Name-based)
       if (query.state) {
-        whereClauses.push(`s.state = $${paramIdx}`);
+        // FIX: Add UPPER() and TRIM() for name mismatches
+        whereClauses.push(`TRIM(UPPER(s.state)) = TRIM(UPPER($${paramIdx}))`);
         values.push(query.state);
         paramIdx++;
       }
-      // C. Filter by Country
+      // Filter by Country
       if (query.country_code) {
-        whereClauses.push(`d.country_code = $${paramIdx}`);
+        whereClauses.push(`TRIM(d.country_code) = TRIM($${paramIdx})`);
         values.push(query.country_code);
         paramIdx++;
       }
     }
 
-    // Pincode Filters
+    // [PINCODE MASTER]: Filter Logic
     if (type === "PINCODE_MASTER") {
       if (query.district) {
+        // FIX: Filter 'p.district' directly (Pincode table column)
         whereClauses.push(`p.district = $${paramIdx}`);
         values.push(query.district);
         paramIdx++;
       }
-      // If filtering by State Name
       if (query.state) {
-        whereClauses.push(`p.state = $${paramIdx}`);
+        // FIX: Filter 'p.state' directly (Pincode table column)
+        whereClauses.push(`TRIM(UPPER(p.state)) = TRIM(UPPER($${paramIdx}))`);
         values.push(query.state);
         paramIdx++;
       }
@@ -99,26 +106,25 @@ export class MastersService {
       whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
 
     // --- 2. Build SELECT Query ---
-    let selectSql = `SELECT * FROM ${config.table}`;
+    let selectSql = `SELECT ${mainAlias}.* FROM ${config.table} ${mainAlias}`;
 
     // Define Joins
     if (type === "STATE") {
-      // Join to show Country Name
       selectSql = `
         SELECT s.*, c.country as parent_name
         FROM mast_state s
         LEFT JOIN mast_country c ON s.country_code = c.country_code
       `;
     } else if (type === "DISTRICT") {
-      // Join on STATE_CODE (Not ID)
+      // FIX: Robust Join using TRIM
       selectSql = `
         SELECT d.*, s.state as parent_name
         FROM mast_district d
-        LEFT JOIN mast_state s ON d.state_code = s.state_code AND d.country_code = s.country_code
+        LEFT JOIN mast_state s 
+          ON TRIM(d.state_code) = TRIM(s.state_code) 
+          AND TRIM(d.country_code) = TRIM(s.country_code)
       `;
     } else if (type === "PINCODE_MASTER") {
-      // No joins needed! The table already has 'state' and 'district' names.
-      // We just join Country for the country name.
       selectSql = `
         SELECT p.*, c.country as country_name
         FROM mast_pincode p
@@ -130,30 +136,57 @@ export class MastersService {
     const dataQuery = `
       ${selectSql}
       ${whereSql}
-      ORDER BY ${prefix}${config.sort} ASC  -- <--- FIXED: Added prefix to sort too
+      ORDER BY ${prefix}${config.sort} ASC, ${prefix}${config.pk} ASC
       LIMIT ${limit} OFFSET ${offset}
     `;
 
-    const countQuery = `SELECT COUNT(*) as total FROM ${config.table} ${alias} ${whereSql}`;
+    // Count Query: Must use same WHERE clauses
+    const fromClause = selectSql.substring(
+      selectSql.toUpperCase().indexOf("FROM")
+    );
+    const countQuery = `SELECT COUNT(*) as total ${fromClause} ${whereSql}`;
 
     try {
+      console.log(`\n🔍 [${type}] SQL:\n${dataQuery}`); // Debug SQL
+
+      console.log("📌 [SERVICE] SQL Params:", values);
+
       const [dataRes, countRes] = await Promise.all([
         this.pool.query(dataQuery, values),
         this.pool.query(countQuery, values),
       ]);
+
+      const totalRecords = parseInt(countRes.rows[0]?.total || "0", 10);
+
       return {
         data: dataRes.rows,
-        total: parseInt(countRes.rows[0]?.total || "0"),
+        total: totalRecords,
         page,
-        lastPage: Math.ceil(parseInt(countRes.rows[0]?.total || "0") / limit),
+        lastPage: Math.ceil(totalRecords / limit),
       };
     } catch (err) {
+      console.error("\n❌ DB Error:", err.message);
       throw new InternalServerErrorException(err.message);
     }
   }
 
   // --- GENERIC CREATE ---
   async create(type: string, body: any) {
+    if (body.state_code && !body.state) {
+      // 🔥 FIX: Use TRIM() here to match 'AN ' with 'AN'
+      const stateRes = await this.pool.query(
+        `SELECT state FROM mast_state WHERE TRIM(state_code) = TRIM($1) LIMIT 1`,
+        [body.state_code]
+      );
+      if (stateRes.rows[0]) {
+        body.state = stateRes.rows[0].state;
+      } else {
+        // Optional: Fail explicitly if State Name not found to avoid DB constraint error
+        throw new BadRequestException(
+          `Could not find State Name for code: ${body.state_code}`
+        );
+      }
+    }
     const config = this.tableMap[type];
     if (!config) throw new BadRequestException(`Invalid Master Type: ${type}`);
 
@@ -184,6 +217,15 @@ export class MastersService {
 
   // --- GENERIC UPDATE ---
   async update(type: string, id: string, body: any) {
+    if (type === "PINCODE_MASTER" && body.state_code && !body.state) {
+      // 🔥 FIX: Use TRIM() here too
+      const stateRes = await this.pool.query(
+        `SELECT state FROM mast_state WHERE TRIM(state_code) = TRIM($1) LIMIT 1`,
+        [body.state_code]
+      );
+      if (stateRes.rows[0]) body.state = stateRes.rows[0].state;
+    }
+
     const config = this.tableMap[type];
     if (!config) throw new BadRequestException(`Invalid Master Type: ${type}`);
 

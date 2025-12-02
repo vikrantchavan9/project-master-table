@@ -16,6 +16,8 @@ export class MastersController {
 
   @Get(":type")
   async findAll(@Param("type") type: string, @Query() query: any) {
+    console.log("📌 [CONTROLLER] Type:", type.toUpperCase());
+    console.log("📌 [CONTROLLER] Query received:", query);
     return this.mastersService.findAll(type.toUpperCase(), query);
   }
 

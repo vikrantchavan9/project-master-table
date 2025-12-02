@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Search,
   Edit2,
@@ -40,65 +40,73 @@ export default function MasterEntry() {
   const API_URL =
     process.env.NEXT_PUBLIC_API_URL || "http://localhost:2001/api/masters";
 
-  // --- Fetch Data ---
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({
-        page: pagination.page.toString(),
-        limit: "10",
-      });
-
-      // Auto-attach parent filters for table view if they exist in formData
-      // (e.g. Filter Grid by selected Country)
-      config.fields.forEach((field) => {
-        if (field.type === "dropdown" && formData[field.name]) {
-          params.append(field.name, formData[field.name]);
+  // --- API HELPER: FETCH DROPDOWN OPTIONS ---
+  const loadLookup = useCallback(
+    async (masterType: string, parentParam?: string, parentValue?: string) => {
+      try {
+        let url = `${API_URL}/${masterType}?limit=1000`;
+        if (parentParam && parentValue) {
+          url += `&${parentParam}=${parentValue}`;
         }
-      });
 
-      const res = await fetch(`${API_URL}/${selectedMasterKey}?${params}`);
-      const data = await res.json();
+        console.log(`🔍 [LOOKUP] Fetching: ${url}`); // DEBUG LOG
+        console.log("📌 [DEBUG] parentParam:", parentParam);
+        console.log("📌 [DEBUG] parentValue:", parentValue);
+        console.log("📌 [DEBUG] Final Lookup URL:", url);
 
-      setTableData(data.data || []);
+        const res = await fetch(url);
+        const data = await res.json();
 
-      setPagination((prev) => ({
-        ...prev,
-        total: data.total || 0,
-        lastPage: data.lastPage || 1,
-      }));
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
+        console.log("📌 [DEBUG] Raw API Response:", data);
 
-  // Generic Lookup Loader
-  const loadLookup = async (
-    masterType: string,
-    parentParam?: string,
-    parentValue?: string
-  ) => {
-    // If filtering by parent, always fetch new data. If generic load, check cache.
-    if (!parentParam && lookups[masterType] && lookups[masterType].length > 0)
-      return;
+        console.log(
+          `✅ [LOOKUP] Loaded ${data.data?.length} items for ${masterType}`
+        ); // DEBUG LOG
 
-    try {
-      let url = `${API_URL}/${masterType}?limit=1000`;
-      if (parentParam && parentValue) {
-        url += `&${parentParam}=${parentValue}`;
+        setLookups((prev) => ({ ...prev, [masterType]: data.data || [] }));
+      } catch (e) {
+        console.error("Lookup Error:", e);
       }
-      const res = await fetch(url);
-      const data = await res.json();
-      setLookups((prev) => ({ ...prev, [masterType]: data.data || [] }));
-    } catch (e) {
-      console.error(e);
-    }
-  };
+    },
+    [API_URL]
+  );
 
-  // --- Effects ---
+  // --- Fetch Data ---
+  const fetchData = useCallback(
+    async (pageIdx: number = 1) => {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({
+          page: pageIdx.toString(),
+          limit: "10",
+        });
+        config.fields.forEach((field) => {
+          if (field.type === "dropdown" && formData[field.name]) {
+            params.append(field.name, formData[field.name]);
+          }
+        });
+
+        const res = await fetch(`${API_URL}/${selectedMasterKey}?${params}`);
+        if (!res.ok) throw new Error(res.statusText);
+        const data = await res.json();
+        setTableData(data.data || []);
+        setPagination({
+          page: pageIdx,
+          total: data.total || 0,
+          lastPage: data.lastPage || 1,
+        });
+      } catch (err) {
+        console.error("Fetch Error:", err);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [API_URL, selectedMasterKey, config, formData]
+  );
+
+  // --- EFFECT 1: RESET ON MASTER CHANGE ---
   useEffect(() => {
+    console.log(`🔄 [SWITCH] Master changed to: ${selectedMasterKey}`); // DEBUG LOG
     setEditId(null);
     setFormData({});
     setTableData([]);
@@ -113,26 +121,54 @@ export default function MasterEntry() {
     });
   }, [selectedMasterKey, pagination.page]);
 
-  // Handle Cascading Dropdowns (Dependent Lookups)
+  /// --- EFFECT 2: CASCADING DROPDOWNS ---
   useEffect(() => {
+    // Loop through all fields to see if any depend on the current form data
     config.fields.forEach((field) => {
-      // If this field has a parent (e.g., State depends on Country)
+      // Check if this field has a parent (e.g. District depends on State)
       if (field.parentField && field.lookupMaster) {
         const parentValue = formData[field.parentField];
+
+        // DEBUG: Check if we are detecting the parent change
+        if (formData[field.parentField] !== undefined) {
+          console.log(
+            `⚡ [CASCADE] Field '${field.name}' depends on '${field.parentField}'. Value is: '${parentValue}'`
+          );
+        }
+        console.log("📌 [DEBUG] Form Data:", formData);
+        console.log("📌 [DEBUG] lookups before load:", lookups);
+
         if (parentValue) {
-          // Fetch filtered lookup (e.g., States for IN)
           loadLookup(field.lookupMaster, field.parentField, parentValue);
         } else {
-          // Clear if parent is empty
+          // Clear options if parent is empty
           setLookups((prev) => ({ ...prev, [field.lookupMaster!]: [] }));
         }
       }
     });
-  }, [formData.country_code, formData.stateID, config]); // Re-run when context changes
+  }, [formData, config]); // Re-run when form data changes
 
   // --- Handlers ---
-  const handleInput = (key: string, val: any) =>
+  const handleInput = (key: string, val: any) => {
+    console.log(`✍️ [INPUT] ${key} = ${val}`); // DEBUG LOG
     setFormData((p: any) => ({ ...p, [key]: val }));
+  };
+
+  const handlePageChange = (newPage: number) => {
+    if (newPage < 1 || newPage > pagination.lastPage) return;
+    fetchData(newPage);
+  };
+
+  const handleEdit = (row: any) => {
+    setEditId(row[config.pk]);
+    setFormData(row);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleCancel = () => {
+    setEditId(null);
+    setFormData({});
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -140,7 +176,6 @@ export default function MasterEntry() {
     const url = editId
       ? `${API_URL}/${selectedMasterKey}/${editId}`
       : `${API_URL}/${selectedMasterKey}`;
-
     try {
       const res = await fetch(url, {
         method,
@@ -148,13 +183,9 @@ export default function MasterEntry() {
         body: JSON.stringify(formData),
       });
       if (res.ok) {
-        alert("Saved!");
-        fetchData();
-        if (editId) {
-          setEditId(null);
-          setFormData({});
-        } else {
-          // Clear only non-dropdown fields to allow rapid entry
+        fetchData(pagination.page);
+        if (editId) handleCancel();
+        else {
           const clean: any = {};
           config.fields.forEach((f) => {
             if (f.type === "dropdown") clean[f.name] = formData[f.name];
@@ -177,19 +208,14 @@ export default function MasterEntry() {
         `${API_URL}/${selectedMasterKey}/${row[config.pk]}`,
         { method: "DELETE" }
       );
-      if (res.ok) fetchData();
+      if (res.ok) fetchData(pagination.page);
+      else {
+        const err = await res.json();
+        alert(err.message);
+      }
     } catch (e) {
       alert("Error deleting");
     }
-  };
-
-  const handleEdit = (row: any) => {
-    setEditId(row[config.pk]);
-    // Map row data to form data.
-    // Backend returns 'stateid' (lowercase) usually, but check your generic service response
-    // We spread row, then ensure specific lookups match
-    setFormData(row);
-    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   // --- Dynamic Rendering ---
@@ -285,6 +311,40 @@ export default function MasterEntry() {
                       >
                         <option value="" className="text-slate-500">
                           Select {field.label}...
+                          {(lookups[field.lookupMaster!] || []).map(
+                            (item: any, index: number) => {
+                              const display =
+                                item.country ||
+                                item.state ||
+                                item.district ||
+                                item.option ||
+                                item.place ||
+                                item.occupation ||
+                                item.language ||
+                                item.name;
+                              const value = field.valueKey
+                                ? item[field.valueKey]
+                                : item.stateid ||
+                                  item.districtid ||
+                                  item.placeid ||
+                                  item.mastid ||
+                                  item.country_code ||
+                                  item.id;
+                              return (
+                                <option
+                                  key={
+                                    item.stateid ||
+                                    item.districtid ||
+                                    item.country_code + "_code" ||
+                                    item.id
+                                  }
+                                  value={value}
+                                >
+                                  {display}
+                                </option>
+                              );
+                            }
+                          )}
                         </option>
                         {(lookups[field.lookupMaster!] || []).map(
                           (item: any) => {
@@ -301,16 +361,9 @@ export default function MasterEntry() {
                               item.career_choice ||
                               item.name;
                             const value =
-                              item.stateid ||
-                              item.districtid ||
-                              item.placeid ||
-                              item.mastid ||
-                              item.leadtypeid ||
-                              item.choiceid ||
-                              item.occuid ||
-                              item.langid ||
-                              item.statusid ||
+                              item.state_code ||
                               item.country_code ||
+                              item.districtid ||
                               item.id;
                             return (
                               <option key={value} value={value}>
@@ -463,9 +516,7 @@ export default function MasterEntry() {
             <div className="p-4 border-t border-slate-800 flex justify-end items-center gap-3 bg-slate-900">
               <button
                 disabled={pagination.page === 1}
-                onClick={() =>
-                  setPagination((p) => ({ ...p, page: p.page - 1 }))
-                }
+                onClick={() => handlePageChange(pagination.page - 1)}
                 className="p-2 border border-slate-700 rounded-lg hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent text-slate-400 transition-colors"
               >
                 <ChevronLeft size={16} />
@@ -476,9 +527,7 @@ export default function MasterEntry() {
               </span>
               <button
                 disabled={pagination.page >= pagination.lastPage}
-                onClick={() =>
-                  setPagination((p) => ({ ...p, page: p.page + 1 }))
-                }
+                onClick={() => handlePageChange(pagination.page + 1)}
                 className="p-2 border border-slate-700 rounded-lg hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent text-slate-400 transition-colors"
               >
                 <ChevronRight size={16} />

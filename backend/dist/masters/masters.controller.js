@@ -20,6 +20,8 @@ let MastersController = class MastersController {
         this.mastersService = mastersService;
     }
     async findAll(type, query) {
+        console.log("📌 [CONTROLLER] Type:", type.toUpperCase());
+        console.log("📌 [CONTROLLER] Query received:", query);
         return this.mastersService.findAll(type.toUpperCase(), query);
     }
     async create(type, body) {

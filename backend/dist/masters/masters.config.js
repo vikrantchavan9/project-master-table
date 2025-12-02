@@ -29,6 +29,7 @@ exports.MASTER_DB_CONFIG = {
             "postoffice",
             "district",
             "state",
+            "state_code",
             "country_code",
             "advisor",
         ],

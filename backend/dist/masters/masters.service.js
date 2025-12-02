@@ -29,14 +29,14 @@ let MastersService = class MastersService {
         const limit = parseInt(query.limit) || 10;
         const offset = (page - 1) * limit;
         const search = query.search || "";
-        const alias = type === "STATE"
-            ? "s"
-            : type === "DISTRICT"
-                ? "d"
-                : type === "PINCODE_MASTER"
-                    ? "p"
-                    : "";
-        const prefix = alias ? `${alias}.` : "";
+        const aliasMap = {
+            COUNTRY: "c",
+            STATE: "s",
+            DISTRICT: "d",
+            PINCODE_MASTER: "p",
+        };
+        const mainAlias = aliasMap[type] || "m";
+        const prefix = `${mainAlias}.`;
         let whereClauses = [];
         let values = [];
         let paramIdx = 1;
@@ -46,23 +46,23 @@ let MastersService = class MastersService {
             paramIdx++;
         }
         if (type === "STATE" && query.country_code) {
-            whereClauses.push(`s.country_code = $${paramIdx}`);
+            whereClauses.push(`TRIM(s.country_code) = TRIM($${paramIdx})`);
             values.push(query.country_code);
             paramIdx++;
         }
         if (type === "DISTRICT") {
             if (query.state_code) {
-                whereClauses.push(`d.state_code = $${paramIdx}`);
+                whereClauses.push(`TRIM(d.state_code) = TRIM($${paramIdx})`);
                 values.push(query.state_code);
                 paramIdx++;
             }
             if (query.state) {
-                whereClauses.push(`s.state = $${paramIdx}`);
+                whereClauses.push(`TRIM(UPPER(s.state)) = TRIM(UPPER($${paramIdx}))`);
                 values.push(query.state);
                 paramIdx++;
             }
             if (query.country_code) {
-                whereClauses.push(`d.country_code = $${paramIdx}`);
+                whereClauses.push(`TRIM(d.country_code) = TRIM($${paramIdx})`);
                 values.push(query.country_code);
                 paramIdx++;
             }
@@ -74,13 +74,13 @@ let MastersService = class MastersService {
                 paramIdx++;
             }
             if (query.state) {
-                whereClauses.push(`p.state = $${paramIdx}`);
+                whereClauses.push(`TRIM(UPPER(p.state)) = TRIM(UPPER($${paramIdx}))`);
                 values.push(query.state);
                 paramIdx++;
             }
         }
         const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
-        let selectSql = `SELECT * FROM ${config.table}`;
+        let selectSql = `SELECT ${mainAlias}.* FROM ${config.table} ${mainAlias}`;
         if (type === "STATE") {
             selectSql = `
         SELECT s.*, c.country as parent_name
@@ -92,7 +92,9 @@ let MastersService = class MastersService {
             selectSql = `
         SELECT d.*, s.state as parent_name
         FROM mast_district d
-        LEFT JOIN mast_state s ON d.state_code = s.state_code AND d.country_code = s.country_code
+        LEFT JOIN mast_state s 
+          ON TRIM(d.state_code) = TRIM(s.state_code) 
+          AND TRIM(d.country_code) = TRIM(s.country_code)
       `;
         }
         else if (type === "PINCODE_MASTER") {
@@ -105,27 +107,41 @@ let MastersService = class MastersService {
         const dataQuery = `
       ${selectSql}
       ${whereSql}
-      ORDER BY ${prefix}${config.sort} ASC  -- <--- FIXED: Added prefix to sort too
+      ORDER BY ${prefix}${config.sort} ASC, ${prefix}${config.pk} ASC
       LIMIT ${limit} OFFSET ${offset}
     `;
-        const countQuery = `SELECT COUNT(*) as total FROM ${config.table} ${alias} ${whereSql}`;
+        const fromClause = selectSql.substring(selectSql.toUpperCase().indexOf("FROM"));
+        const countQuery = `SELECT COUNT(*) as total ${fromClause} ${whereSql}`;
         try {
+            console.log(`\n🔍 [${type}] SQL:\n${dataQuery}`);
+            console.log("📌 [SERVICE] SQL Params:", values);
             const [dataRes, countRes] = await Promise.all([
                 this.pool.query(dataQuery, values),
                 this.pool.query(countQuery, values),
             ]);
+            const totalRecords = parseInt(countRes.rows[0]?.total || "0", 10);
             return {
                 data: dataRes.rows,
-                total: parseInt(countRes.rows[0]?.total || "0"),
+                total: totalRecords,
                 page,
-                lastPage: Math.ceil(parseInt(countRes.rows[0]?.total || "0") / limit),
+                lastPage: Math.ceil(totalRecords / limit),
             };
         }
         catch (err) {
+            console.error("\n❌ DB Error:", err.message);
             throw new common_1.InternalServerErrorException(err.message);
         }
     }
     async create(type, body) {
+        if (body.state_code && !body.state) {
+            const stateRes = await this.pool.query(`SELECT state FROM mast_state WHERE TRIM(state_code) = TRIM($1) LIMIT 1`, [body.state_code]);
+            if (stateRes.rows[0]) {
+                body.state = stateRes.rows[0].state;
+            }
+            else {
+                throw new common_1.BadRequestException(`Could not find State Name for code: ${body.state_code}`);
+            }
+        }
         const config = this.tableMap[type];
         if (!config)
             throw new common_1.BadRequestException(`Invalid Master Type: ${type}`);
@@ -147,6 +163,11 @@ let MastersService = class MastersService {
         }
     }
     async update(type, id, body) {
+        if (type === "PINCODE_MASTER" && body.state_code && !body.state) {
+            const stateRes = await this.pool.query(`SELECT state FROM mast_state WHERE TRIM(state_code) = TRIM($1) LIMIT 1`, [body.state_code]);
+            if (stateRes.rows[0])
+                body.state = stateRes.rows[0].state;
+        }
         const config = this.tableMap[type];
         if (!config)
             throw new common_1.BadRequestException(`Invalid Master Type: ${type}`);

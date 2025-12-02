@@ -35,6 +35,7 @@ export const MASTER_DB_CONFIG: Record<string, MasterConfig> = {
       "postoffice",
       "district",
       "state",
+      "state_code",
       "country_code",
       "advisor",
     ],
